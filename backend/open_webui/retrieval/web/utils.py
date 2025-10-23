@@ -4,7 +4,6 @@ import socket
 import ssl
 import urllib.parse
 import urllib.request
-from collections import defaultdict
 from datetime import datetime, time, timedelta
 from typing import (
     Any,
@@ -21,7 +20,6 @@ import aiohttp
 import certifi
 import validators
 from langchain_community.document_loaders import PlaywrightURLLoader, WebBaseLoader
-from langchain_community.document_loaders.firecrawl import FireCrawlLoader
 from langchain_community.document_loaders.base import BaseLoader
 from langchain_core.documents import Document
 from open_webui.retrieval.loaders.tavily import TavilyLoader
@@ -39,7 +37,9 @@ from open_webui.config import (
     EXTERNAL_WEB_LOADER_URL,
     EXTERNAL_WEB_LOADER_API_KEY,
 )
-from open_webui.env import SRC_LOG_LEVELS, AIOHTTP_CLIENT_SESSION_SSL
+from open_webui.env import SRC_LOG_LEVELS
+
+from firecrawl import Firecrawl
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
@@ -189,8 +189,8 @@ class SafeFireCrawlLoader(BaseLoader, RateLimitMixin, URLProcessingMixin):
                 (uses FIRE_CRAWL_API_KEY environment variable if not provided).
             api_url: Base URL for FireCrawl API. Defaults to official API endpoint.
             mode: Operation mode selection:
-                - 'crawl': Website crawling mode (default)
-                - 'scrape': Direct page scraping
+                - 'crawl': Website crawling mode
+                - 'scrape': Direct page scraping (default)
                 - 'map': Site map generation
             proxy: Proxy override settings for the FireCrawl API.
             params: The parameters to pass to the Firecrawl API.
@@ -219,47 +219,71 @@ class SafeFireCrawlLoader(BaseLoader, RateLimitMixin, URLProcessingMixin):
 
     def lazy_load(self) -> Iterator[Document]:
         """Load documents concurrently using FireCrawl."""
-        for url in self.web_paths:
-            try:
-                self._safe_process_url_sync(url)
-                loader = FireCrawlLoader(
-                    url=url,
-                    api_key=self.api_key,
-                    api_url=self.api_url,
-                    mode=self.mode,
-                    params=self.params,
-                )
-                for document in loader.lazy_load():
-                    if not document.metadata.get("source"):
-                        document.metadata["source"] = document.metadata.get("sourceURL")
-                    yield document
-            except Exception as e:
-                if self.continue_on_failure:
-                    log.exception(f"Error loading {url}: {e}")
-                    continue
-                raise e
+        log.info(
+            "Starting FireCrawl batch scrape for %d URLs, params: %s, mode: %s",
+            len(self.web_paths),
+            self.params,
+            self.mode,
+        )
+        firecrawl = Firecrawl(api_key=self.api_key, api_url=self.api_url)
+        result = firecrawl.batch_scrape(
+            self.web_paths,
+            formats=["markdown"],
+            only_main_content=True,
+            skip_tls_verification=not self.verify_ssl,
+            remove_base64_images=True,
+            ignore_invalid_urls=True,
+            max_age=900000,
+            wait_timeout=len(self.web_paths) * 3,
+        )
+
+        if result.status != "completed":
+            log.error(
+                "FireCrawl batch scrape did not complete successfully.",
+                extra={"result": result},
+            )
+            raise ValueError("FireCrawl batch scrape failed.")
+
+        for data in result.data:
+            metadata = data.metadata or {}
+            yield Document(
+                page_content=data.markdown or "",
+                metadata={"source": metadata.url or metadata.source_url or ""},
+            )
 
     async def alazy_load(self):
         """Async version of lazy_load."""
-        for url in self.web_paths:
-            try:
-                await self._safe_process_url(url)
-                loader = FireCrawlLoader(
-                    url=url,
-                    api_key=self.api_key,
-                    api_url=self.api_url,
-                    mode=self.mode,
-                    params=self.params,
-                )
-                async for document in loader.alazy_load():
-                    if not document.metadata.get("source"):
-                        document.metadata["source"] = document.metadata.get("sourceURL")
-                    yield document
-            except Exception as e:
-                if self.continue_on_failure:
-                    log.exception(f"Error loading {url}: {e}")
-                    continue
-                raise e
+        log.info(
+            "Starting FireCrawl batch scrape for %d URLs, params: %s, mode: %s",
+            len(self.web_paths),
+            self.params,
+            self.mode,
+        )
+        firecrawl = Firecrawl(api_key=self.api_key, api_url=self.api_url)
+        result = firecrawl.batch_scrape(
+            self.web_paths,
+            formats=["markdown"],
+            only_main_content=True,
+            skip_tls_verification=not self.verify_ssl,
+            remove_base64_images=True,
+            ignore_invalid_urls=True,
+            max_age=900000,
+            wait_timeout=len(self.web_paths) * 3,
+        )
+
+        if result.status != "completed":
+            log.error(
+                "FireCrawl batch scrape did not complete successfully.",
+                extra={"result": result},
+            )
+            raise ValueError("FireCrawl batch scrape failed.")
+
+        for data in result.data:
+            metadata = data.metadata or {}
+            yield Document(
+                page_content=data.markdown or "",
+                metadata={"source": metadata.url or metadata.source_url or ""},
+            )
 
 
 class SafeTavilyLoader(BaseLoader, RateLimitMixin, URLProcessingMixin):
