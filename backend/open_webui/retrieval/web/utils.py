@@ -229,7 +229,6 @@ class SafeFireCrawlLoader(BaseLoader, RateLimitMixin, URLProcessingMixin):
         result = firecrawl.batch_scrape(
             self.web_paths,
             formats=["markdown"],
-            only_main_content=True,
             skip_tls_verification=not self.verify_ssl,
             remove_base64_images=True,
             ignore_invalid_urls=True,
@@ -263,7 +262,6 @@ class SafeFireCrawlLoader(BaseLoader, RateLimitMixin, URLProcessingMixin):
         result = firecrawl.batch_scrape(
             self.web_paths,
             formats=["markdown"],
-            only_main_content=True,
             skip_tls_verification=not self.verify_ssl,
             remove_base64_images=True,
             ignore_invalid_urls=True,
