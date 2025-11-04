@@ -518,11 +518,12 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
                 except Exception as e:
                     if self.continue_on_failure:
                         log.exception(f"Error loading {url}: {e}")
-                        continue
+                        return None, None
                     raise e
 
             for text, metadata in asyncio.as_completed([_ascrape_page(url) for url in self.urls]):
-                yield Document(page_content=text, metadata=metadata)
+                if text is not None and metadata is not None:
+                    yield Document(page_content=text, metadata=metadata)
 
             await browser.close()
 
