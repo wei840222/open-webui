@@ -30,7 +30,7 @@ def search_google_pse(
         list[SearchResult]: A list of SearchResult objects.
     """
     url = "https://www.googleapis.com/customsearch/v1"
-    headers = {"Content-Type": "application/json"}
+    headers = {"X-Goog-Api-Key": api_key, "Accept-Encoding": "gzip"}
     all_results = []
     start_index = 1  # Google PSE start parameter is 1-based
 
@@ -39,13 +39,13 @@ def search_google_pse(
         params = {
             "cx": search_engine_id,
             "q": query,
-            "key": api_key,
-            "num": num_results_this_page,
             "start": start_index,
+            "num": num_results_this_page,
+            "safe": "off",
             "cr": "countryTW",
             "gl": "tw",
             "hl": "zh-TW",
-            "safe": "off",
+            "fields": "items/link,items/title,items/snippet",
         }
         response = requests.request("GET", url, headers=headers, params=params)
         response.raise_for_status()
