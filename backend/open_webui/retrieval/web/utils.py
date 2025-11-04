@@ -504,20 +504,39 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
                     headless=self.headless, proxy=self.proxy
                 )
 
+            # Create a list to store all page tasks
+            page_tasks = []
+            
+            # Create pages for all URLs
             for url in self.urls:
                 try:
                     await self._safe_process_url(url)
                     page = await browser.new_page()
-                    response = await page.goto(url, timeout=self.playwright_timeout)
+                    page_tasks.append((url, page, page.goto(url, timeout=self.playwright_timeout)))
+                except Exception as e:
+                    if self.continue_on_failure:
+                        log.exception(f"Error setting up page for {url}: {e}")
+                        continue
+                    raise e
+            
+            # Wait for all page loads to complete
+            for url, page, goto_task in page_tasks:
+                try:
+                    response = await goto_task
                     if response is None:
                         raise ValueError(f"page.goto() returned None for url {url}")
 
                     text = await self.evaluator.evaluate_async(page, browser, response)
                     metadata = {"source": url}
                     yield Document(page_content=text, metadata=metadata)
+                    await page.close()
                 except Exception as e:
                     if self.continue_on_failure:
                         log.exception(f"Error loading {url}: {e}")
+                        try:
+                            await page.close()
+                        except:
+                            pass
                         continue
                     raise e
             await browser.close()

@@ -42,6 +42,10 @@ def search_google_pse(
             "key": api_key,
             "num": num_results_this_page,
             "start": start_index,
+            "cr": "countryTW",
+            "gl": "tw",
+            "hl": "zh-TW",
+            "safe": "off",
         }
         response = requests.request("GET", url, headers=headers, params=params)
         response.raise_for_status()
