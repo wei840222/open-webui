@@ -429,7 +429,7 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
         trust_env: bool = False,
         requests_per_second: Optional[float] = None,
         continue_on_failure: bool = True,
-        headless: bool = True,
+        headless: bool = False,
         remove_selectors: Optional[List[str]] = None,
         proxy: Optional[Dict[str, str]] = None,
         playwright_ws_url: Optional[str] = None,
@@ -504,41 +504,26 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
                     headless=self.headless, proxy=self.proxy
                 )
 
-            # Create a list to store all page tasks
-            page_tasks = []
-            
-            # Create pages for all URLs
-            for url in self.urls:
+            async def _ascrape_page(url):
                 try:
                     await self._safe_process_url(url)
                     page = await browser.new_page()
-                    page_tasks.append((url, page, page.goto(url, timeout=self.playwright_timeout)))
-                except Exception as e:
-                    if self.continue_on_failure:
-                        log.exception(f"Error setting up page for {url}: {e}")
-                        continue
-                    raise e
-            
-            # Wait for all page loads to complete
-            for url, page, goto_task in page_tasks:
-                try:
-                    response = await goto_task
+                    response = await page.goto(url, timeout=self.playwright_timeout)
                     if response is None:
                         raise ValueError(f"page.goto() returned None for url {url}")
 
                     text = await self.evaluator.evaluate_async(page, browser, response)
                     metadata = {"source": url}
-                    yield Document(page_content=text, metadata=metadata)
-                    await page.close()
+                    return text, metadata
                 except Exception as e:
                     if self.continue_on_failure:
                         log.exception(f"Error loading {url}: {e}")
-                        try:
-                            await page.close()
-                        except:
-                            pass
                         continue
                     raise e
+
+            for text, metadata in asyncio.as_completed([_ascrape_page(url) for url in self.urls]):
+                yield Document(page_content=text, metadata=metadata)
+
             await browser.close()
 
 
