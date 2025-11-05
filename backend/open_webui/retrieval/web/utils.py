@@ -424,16 +424,16 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
 
     def __init__(
         self,
-        web_paths: List[str],
+        web_paths: List[str] = [],
         verify_ssl: bool = True,
         trust_env: bool = False,
-        requests_per_second: Optional[float] = None,
+        requests_per_second: float = 5.0,
         continue_on_failure: bool = True,
         headless: bool = False,
         remove_selectors: Optional[List[str]] = None,
         proxy: Optional[Dict[str, str]] = None,
         playwright_ws_url: Optional[str] = None,
-        playwright_timeout: Optional[int] = 10000,
+        playwright_timeout: int = 10000,
     ):
         """Initialize with additional safety parameters and remote browser support."""
 
@@ -520,11 +520,15 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
                         log.exception(f"Error loading {url}: {e}")
                         return None, None
                     raise e
-
-            for task in asyncio.as_completed([_ascrape_page(url) for url in self.urls]):
-                text, metadata = await task
-                if text is not None and metadata is not None:
-                    yield Document(page_content=text, metadata=metadata)
+            
+            batch_size = round(max(5, self.requests_per_second) * self.playwright_timeout / 5000)
+            while self.urls:
+                batch = self.urls[:batch_size]
+                self.urls = self.urls[batch_size:]
+                for task in asyncio.as_completed([_ascrape_page(url) for url in batch]):
+                    text, metadata = await task
+                    if text and metadata:
+                        yield Document(page_content=text, metadata=metadata)
 
             await browser.close()
 
