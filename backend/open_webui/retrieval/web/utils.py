@@ -14,6 +14,7 @@ from typing import (
     Optional,
     Sequence,
     Union,
+    Tuple,
     Literal,
 )
 import aiohttp
@@ -491,6 +492,30 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
                     raise e
             browser.close()
 
+    async def _ascrape_page(self, browser: "Browser", url: str) -> Union[Tuple[str, Dict], Tuple[None, None]]:
+        try:
+            await self._safe_process_url(url)
+            context = await browser.new_context()
+            
+            page = await context.new_page()
+            response = await page.goto(url, timeout=self.playwright_timeout)
+            if response is None:
+                raise ValueError(f"page.goto() returned None for url {url}")
+
+            text = await self.evaluator.evaluate_async(page, browser, response)
+            metadata = {"source": url}
+            return text.strip(), metadata
+        except Exception as e:
+            if self.continue_on_failure:
+                if e.__class__.__name__ == "TimeoutError":
+                    log.warning(f"Timeout loading {url}: {e}")
+                else:
+                    log.exception(f"Error loading {url}: {e}")
+                return None, None
+            raise e
+        finally:
+            await context.close()
+
     async def alazy_load(self) -> AsyncIterator[Document]:
         """Safely load URLs asynchronously with support for remote browser."""
         from playwright.async_api import async_playwright
@@ -500,33 +525,14 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
             if self.playwright_ws_url:
                 browser = await p.chromium.connect(self.playwright_ws_url)
             else:
-                browser = await p.chromium.launch(
-                    headless=self.headless, proxy=self.proxy
-                )
-
-            async def _ascrape_page(url):
-                try:
-                    await self._safe_process_url(url)
-                    page = await browser.new_page()
-                    response = await page.goto(url, timeout=self.playwright_timeout)
-                    if response is None:
-                        raise ValueError(f"page.goto() returned None for url {url}")
-
-                    text = await self.evaluator.evaluate_async(page, browser, response)
-                    metadata = {"source": url}
-                    return text, metadata
-                except Exception as e:
-                    if self.continue_on_failure:
-                        log.exception(f"Error loading {url}: {e}")
-                        return None, None
-                    raise e
+                browser = await p.chromium.launch(headless=self.headless, proxy=self.proxy)
             
-            batch_size = round(max(5, self.requests_per_second) * self.playwright_timeout / 5000)
+            batch_size = round(max(5, self.requests_per_second))
             while self.urls:
                 batch = self.urls[:batch_size]
                 self.urls = self.urls[batch_size:]
-                for task in asyncio.as_completed([_ascrape_page(url) for url in batch]):
-                    text, metadata = await task
+                for task in asyncio.as_completed([self._ascrape_page(browser, url) for url in batch]):
+                    text, metadata = await task 
                     if text and metadata:
                         yield Document(page_content=text, metadata=metadata)
 
