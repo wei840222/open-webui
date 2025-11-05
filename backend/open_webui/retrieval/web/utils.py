@@ -40,6 +40,7 @@ from open_webui.config import (
 )
 from open_webui.env import SRC_LOG_LEVELS
 
+from fake_useragent import UserAgent
 from firecrawl import Firecrawl
 
 log = logging.getLogger(__name__)
@@ -434,7 +435,7 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
         remove_selectors: Optional[List[str]] = None,
         proxy: Optional[Dict[str, str]] = None,
         playwright_ws_url: Optional[str] = None,
-        playwright_timeout: int = 10000,
+        playwright_timeout: int = 5000,
     ):
         """Initialize with additional safety parameters and remote browser support."""
 
@@ -492,25 +493,30 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
                     raise e
             browser.close()
 
-    async def _ascrape_page(self, browser: "Browser", url: str) -> Union[Tuple[str, Dict], Tuple[None, None]]:
+    async def _ascrape_page(self, url: str, browser: "Browser", wait_until: str = "load", start_time: Optional[float] = None) -> Union[Tuple[str, Dict], Tuple[None, None]]:
+        if start_time is None:
+            start_time = asyncio.get_event_loop().time()
         try:
             await self._safe_process_url(url)
-            context = await browser.new_context()
+            context = await browser.new_context(viewport={"width": 1280, "height": 800}, user_agent=UserAgent().chrome, locale="zh-TW", timezone_id="Asia/Taipei", accept_downloads=False)
             
             page = await context.new_page()
-            response = await page.goto(url, timeout=self.playwright_timeout)
+            response = await page.goto(url, timeout=self.playwright_timeout, wait_until=wait_until)
             if response is None:
                 raise ValueError(f"page.goto() returned None for url {url}")
 
             text = await self.evaluator.evaluate_async(page, browser, response)
             metadata = {"source": url}
+            log.info(f"Successfully loaded {url} in {asyncio.get_event_loop().time() - start_time:.2f} seconds")
             return text.strip(), metadata
+
         except Exception as e:
             if self.continue_on_failure:
-                if e.__class__.__name__ == "TimeoutError":
-                    log.warning(f"Timeout loading {url}: {e}")
-                else:
-                    log.exception(f"Error loading {url}: {e}")
+                if e.__class__.__name__ == "TimeoutError" and wait_until == "load":
+                    # Retry with "networkidle" if "load" times out
+                    return await self._ascrape_page(url, browser, "networkidle", start_time)
+
+                log.warning(f"Error loading {url}: {e}")
                 return None, None
             raise e
         finally:
@@ -525,13 +531,29 @@ class SafePlaywrightURLLoader(PlaywrightURLLoader, RateLimitMixin, URLProcessing
             if self.playwright_ws_url:
                 browser = await p.chromium.connect(self.playwright_ws_url)
             else:
-                browser = await p.chromium.launch(headless=self.headless, proxy=self.proxy)
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--no-first-run",
+                    "--no-zygote",
+                    "--no-default-browser-check",
+                    "--disable-infobars",
+                    "--disable-extensions",
+                    "--disable-plugins",
+                ]
+                if self.headless:
+                    args.extend([
+                        "--disable-accelerated-2d-canvas",
+                        "--disable-gpu",
+                        "--disable-http2"
+                    ])
+                browser = await p.chromium.launch(headless=self.headless, proxy=self.proxy, args=args)
             
             batch_size = round(max(5, self.requests_per_second))
             while self.urls:
                 batch = self.urls[:batch_size]
                 self.urls = self.urls[batch_size:]
-                for task in asyncio.as_completed([self._ascrape_page(browser, url) for url in batch]):
+                for task in asyncio.as_completed([self._ascrape_page(url, browser) for url in batch]):
                     text, metadata = await task 
                     if text and metadata:
                         yield Document(page_content=text, metadata=metadata)

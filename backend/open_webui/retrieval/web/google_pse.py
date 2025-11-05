@@ -64,6 +64,8 @@ def search_google_pse(
     if filter_list:
         all_results = get_filtered_results(all_results, filter_list)
 
+    log.info(f"Google PSE query: '{query}' {len(all_results)} results found: {[result['title'] for result in all_results]}")
+
     return [
         SearchResult(
             link=result["link"],
