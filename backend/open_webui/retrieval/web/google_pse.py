@@ -45,6 +45,7 @@ def search_google_pse(
             "cr": "countryTW",
             "gl": "tw",
             "hl": "zh-TW",
+            "lr": "lang_zh-TW",
             "fields": "items/link,items/title,items/snippet",
         }
         response = requests.request("GET", url, headers=headers, params=params)
